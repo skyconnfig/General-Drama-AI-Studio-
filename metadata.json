@@ -1,0 +1,8 @@
+{
+  "name": "General Drama AI Studio (通用短剧工作台)",
+  "description": "An end-to-end AI workbench for short drama production, from theme conceptualization to scripted scenes and keyframe-based transition video synthesis.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
