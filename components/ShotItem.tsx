@@ -13,8 +13,8 @@ interface ShotItemProps {
   transitionRole?: 'start' | 'end' | null;
 }
 
-const ShotItem: React.FC<ShotItemProps> = ({ 
-  shot, currentScene, globalStyle, characters, onUpdate, onSetAsTransitionTarget, transitionRole 
+const ShotItem: React.FC<ShotItemProps> = ({
+  shot, currentScene, globalStyle, characters, onUpdate, onSetAsTransitionTarget, transitionRole
 }) => {
   const [error, setError] = useState<string | null>(null);
 
@@ -25,7 +25,7 @@ const ShotItem: React.FC<ShotItemProps> = ({
       const charContext = characters
         .filter(c => shot.selectedCharacters.includes(c.name))
         .map(c => `${c.name}: ${c.description}`).join('; ');
-      
+
       const firstShotImg = currentScene.shots.find(s => s.imageUrl && s.id !== shot.id)?.imageUrl;
       const url = await generateImage(shot.description, globalStyle, charContext, currentScene.title, firstShotImg);
       onUpdate({ ...shot, imageUrl: url || undefined, isGeneratingImage: false });
@@ -36,13 +36,20 @@ const ShotItem: React.FC<ShotItemProps> = ({
   };
 
   return (
-    <div className={`group bg-[#121212] rounded-[2rem] overflow-hidden border transition-all duration-500 ${
-      transitionRole === 'start' ? 'border-blue-500 ring-4 ring-blue-500/10 scale-[1.02]' : 
-      transitionRole === 'end' ? 'border-green-500 ring-4 ring-green-500/10 scale-[1.02]' : 'border-white/5 hover:border-white/20'
-    }`}>
+    <div className={`group bg-[#121212] rounded-[2rem] overflow-hidden border transition-all duration-500 ${transitionRole === 'start' ? 'border-blue-500 ring-4 ring-blue-500/10 scale-[1.02]' :
+        transitionRole === 'end' ? 'border-green-500 ring-4 ring-green-500/10 scale-[1.02]' : 'border-white/5 hover:border-white/20'
+      }`}>
       <div className="relative aspect-video bg-black overflow-hidden">
         {shot.videoUrl ? (
-          <video src={shot.videoUrl} controls className="w-full h-full object-cover" />
+          <video
+            src={shot.videoUrl}
+            controls
+            autoPlay
+            loop
+            muted
+            playsInline
+            className="w-full h-full object-cover"
+          />
         ) : shot.imageUrl ? (
           <img src={shot.imageUrl} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105" />
         ) : (
@@ -57,7 +64,7 @@ const ShotItem: React.FC<ShotItemProps> = ({
             <span className="text-[10px] font-black uppercase tracking-widest">{shot.isGeneratingImage ? "AI 画师构图中..." : "等待生成底图"}</span>
           </div>
         )}
-        
+
         {/* 角色与类型标记 */}
         <div className="absolute top-4 left-4 flex flex-wrap gap-2">
           <span className="text-[10px] bg-black/60 backdrop-blur-md border border-white/10 px-2 py-1 rounded-md text-white font-black uppercase tracking-tighter">
@@ -71,15 +78,15 @@ const ShotItem: React.FC<ShotItemProps> = ({
         {/* 转场设置按钮 */}
         {shot.imageUrl && onSetAsTransitionTarget && (
           <div className="absolute top-4 right-4 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-            <button 
-              onClick={() => onSetAsTransitionTarget('start')} 
+            <button
+              onClick={() => onSetAsTransitionTarget('start')}
               className={`p-2 rounded-xl backdrop-blur-md border transition-all ${transitionRole === 'start' ? 'bg-blue-600 border-white/20' : 'bg-black/40 border-white/10 hover:bg-blue-600/50'}`}
               title="设为转场起始点"
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 19l-7-7 7-7m8 14l-7-7 7-7" /></svg>
             </button>
-            <button 
-              onClick={() => onSetAsTransitionTarget('end')} 
+            <button
+              onClick={() => onSetAsTransitionTarget('end')}
               className={`p-2 rounded-xl backdrop-blur-md border transition-all ${transitionRole === 'end' ? 'bg-green-600 border-white/20' : 'bg-black/40 border-white/10 hover:bg-green-600/50'}`}
               title="设为转场结束点"
             >
@@ -102,7 +109,7 @@ const ShotItem: React.FC<ShotItemProps> = ({
             placeholder="在此处优化画面内容描述..."
           />
         </div>
-        
+
         <div className="space-y-2 bg-red-600/5 p-4 rounded-xl border border-red-600/10">
           <div className="flex items-center gap-2">
             <div className="w-1.5 h-1.5 bg-red-500 rounded-full animate-pulse"></div>
@@ -117,7 +124,7 @@ const ShotItem: React.FC<ShotItemProps> = ({
         </div>
 
         {error && <div className="text-[10px] text-red-400 bg-red-400/10 p-2 rounded-lg border border-red-400/20">{error}</div>}
-        
+
         <button
           onClick={handleGenerateImage}
           disabled={shot.isGeneratingImage}

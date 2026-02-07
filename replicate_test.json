@@ -1,0 +1,1 @@
+{"detail":"- input is required\n- Additional property prompt is not allowed\n","status":422,"title":"Input validation failed","invalid_fields":[{"type":"required","field":"","description":"input is required"},{"type":"additional_property_not_allowed","field":"","description":"Additional property prompt is not allowed"}]}

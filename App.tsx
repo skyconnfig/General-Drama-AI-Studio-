@@ -1,258 +1,395 @@
+import React, { useState, useEffect } from 'react';
+import { generateScriptWithDeepSeek } from './services/deepseekService';
+import { generateImage as generateImageGemini, generateVideo as generateVideoGemini, checkGeminiConfig } from './services/geminiService';
+import { generateImage as generateImageReplicate, generateVideoWithLuma, checkReplicateConfig, getReplicateApiUrl } from './services/replicateService';
+import { generateImage as generateImageHF, checkHFConfig } from './services/huggingfaceService';
+import { generateImage as generateImagePollinations, generateVideo as generateVideoPollinations, checkPollinationsConfig, getPollinationsUrl } from './services/pollinationsService';
 
-import React, { useState, useMemo } from 'react';
-import { StoryState, Scene, Shot } from './types';
-import ShotItem from './components/ShotItem';
-import { generateScript, generateTransitionVideo, checkVideoApiKey } from './services/geminiService';
+// Provider type
+type Provider = 'pollinations' | 'huggingface' | 'replicate' | 'gemini';
 
-const App: React.FC = () => {
-  const [state, setState] = useState<StoryState>({
-    theme: '',
-    fullScript: '',
-    scenes: [],
-    currentSceneId: '',
-    globalStylePrompt: 'Cinematic film still, high-end production, 8k, realistic, professional lighting, deep shadows, rich textures.',
-    characterProfiles: [],
-    phase: 'concept'
-  });
+interface Shot {
+  type: string;
+  description: string;
+  cameraMovement?: string;
+}
 
+interface Scene {
+  id: number;
+  title: string;
+  atmosphere: string;
+  shots: Shot[];
+  imageUrl?: string;
+  videoUrl?: string;
+}
+
+interface DramaData {
+  title: string;
+  characters: Array<{ name: string; description: string }>;
+  scenes: Scene[];
+}
+
+function App() {
+  const [input, setInput] = useState('');
+  const [output, setOutput] = useState<DramaData | null>(null);
+  const [scenes, setScenes] = useState<Scene[]>([]);
   const [loading, setLoading] = useState(false);
-  const [transitionState, setTransitionState] = useState<{start?: string, end?: string}>({});
-  const [generatingSequence, setGeneratingSequence] = useState(false);
+  const [loadingText, setLoadingText] = useState('');
+  const [currentPhase, setCurrentPhase] = useState<'script' | 'image' | 'video'>('script');
+  const [error, setError] = useState('');
+  const [provider, setProvider] = useState<Provider>('pollinations'); // Default to FREE
+  const [geminiReady, setGeminiReady] = useState(false);
+  const [replicateReady, setReplicateReady] = useState(false);
 
-  const handleGenerateScript = async () => {
-    if (!state.theme) return;
+  useEffect(() => {
+    setGeminiReady(checkGeminiConfig());
+    setReplicateReady(checkReplicateConfig());
+  }, []);
+
+  // Get image generator based on provider
+  const generateImage = async (prompt: string, aspectRatio: string, sceneNumber?: number) => {
+    switch (provider) {
+      case 'pollinations':
+        return await generateImagePollinations(prompt, aspectRatio, sceneNumber);
+      case 'huggingface':
+        return await generateImageHF(prompt, aspectRatio, sceneNumber);
+      case 'replicate':
+        return await generateImageReplicate(prompt, aspectRatio, sceneNumber);
+      case 'gemini':
+        return await generateImageGemini(prompt, aspectRatio, sceneNumber);
+      default:
+        return await generateImagePollinations(prompt, aspectRatio, sceneNumber);
+    }
+  };
+
+  // Get video generator based on provider
+  const generateVideo = async (prompt: string, aspectRatio: string, onProgress?: (status: string) => void) => {
+    switch (provider) {
+      case 'pollinations':
+        return await generateVideoPollinations(prompt, aspectRatio, onProgress);
+      case 'replicate':
+        return await generateVideoWithLuma(prompt, aspectRatio, onProgress);
+      case 'gemini':
+        return await generateVideoGemini(prompt, aspectRatio, onProgress);
+      default:
+        return await generateVideoPollinations(prompt, aspectRatio, onProgress);
+    }
+  };
+
+  const handleGenerate = async () => {
+    if (!input.trim()) return;
     setLoading(true);
+    setError('');
+    setLoadingText('Creating script...');
     try {
-      const data = await generateScript(state.theme);
-      const scenes: Scene[] = data.scenes.map((s: any, idx: number) => ({
-        id: String(idx + 1),
+      console.log('Starting script generation with theme:', input);
+      const data = await generateScriptWithDeepSeek(input);
+      console.log('Script generated successfully:', data);
+      setOutput(data);
+      const sceneArray: Scene[] = (data.scenes || []).map((s: any, idx: number) => ({
+        id: idx,
         title: s.title,
         atmosphere: s.atmosphere,
-        shots: s.shots.map((sh: any, sIdx: number) => ({
-          id: `${idx + 1}-${sIdx + 1}`,
-          index: `${idx + 1}-${sIdx + 1}`,
-          type: sh.type,
-          description: sh.description,
-          isGeneratingImage: false,
-          isGeneratingVideo: false,
-          cameraMovement: sh.cameraMovement || 'Cinematic slow camera movement', // 使用 AI 生成的专业提示词
-          selectedCharacters: data.characters.map((c: any) => c.name).slice(0, 1)
-        }))
+        shots: s.shots || [],
+        imageUrl: undefined,
+        videoUrl: undefined
       }));
-
-      setState(prev => ({
-        ...prev,
-        scenes,
-        characterProfiles: data.characters,
-        currentSceneId: '1',
-        phase: 'assets'
-      }));
-    } catch (e) {
-      console.error(e);
-      alert("生成剧本失败，请检查网络或重试");
-    } finally {
-      setLoading(false);
+      setScenes(sceneArray);
+      console.log('Scenes set:', sceneArray.length);
+    } catch (err: any) {
+      console.error('Script generation error:', err);
+      setError(err.message || 'Script generation failed');
     }
+    setLoading(false);
   };
 
-  const currentScene = useMemo(() => 
-    state.scenes.find(s => s.id === state.currentSceneId) || state.scenes[0],
-  [state.scenes, state.currentSceneId]);
-
-  const handleUpdateShot = (updatedShot: Shot) => {
-    setState(prev => ({
-      ...prev,
-      scenes: prev.scenes.map(s => ({
-        ...s,
-        shots: s.shots.map(sh => sh.id === updatedShot.id ? updatedShot : sh)
-      }))
-    }));
+  const handleGenerateImages = async () => {
+    if (!output || scenes.length === 0) return;
+    setLoading(true);
+    setLoadingText('Generating images...');
+    setCurrentPhase('image');
+    const updatedScenes = [...scenes];
+    for (let i = 0; i < updatedScenes.length; i++) {
+      const scene = updatedScenes[i];
+      setLoadingText(`Generating ${i + 1}/${updatedScenes.length}: ${scene.title}`);
+      try {
+        const prompt = `CINEMATIC SCENE: ${scene.title}. ATMOSPHERE: ${scene.atmosphere}. Dark moody lighting, 8k quality.`;
+        const imageUrl = await generateImage(prompt, '16:9', i + 1);
+        updatedScenes[i] = { ...scene, imageUrl };
+        setScenes([...updatedScenes]);
+      } catch (err) {
+        console.error(`Image failed for scene ${i}:`, err);
+      }
+    }
+    setOutput({ ...output, scenes: updatedScenes });
+    setLoading(false);
   };
 
-  const startTransition = async () => {
-    if (!transitionState.start || !transitionState.end) return;
-    const startShot = state.scenes.flatMap(s => s.shots).find(sh => sh.id === transitionState.start);
-    const endShot = state.scenes.flatMap(s => s.shots).find(sh => sh.id === transitionState.end);
-    
-    if (!startShot?.imageUrl || !endShot?.imageUrl) {
-      alert("请先生成起始帧和结束帧的底图");
+  const handleGenerateVideos = async () => {
+    // Check provider and show appropriate message
+    if (provider === 'huggingface') {
+      setError('Video generation not available on HuggingFace. Switch to Replicate or Gemini.');
       return;
     }
-
-    setGeneratingSequence(true);
-    try {
-      await checkVideoApiKey();
-      const videoUrl = await generateTransitionVideo(
-        startShot.imageUrl, 
-        endShot.imageUrl, 
-        startShot.cameraMovement
-      );
-      handleUpdateShot({ ...startShot, videoUrl });
-    } catch (e) {
-      alert("转场生成失败");
-    } finally {
-      setGeneratingSequence(false);
-      setTransitionState({});
+    
+    if (provider === 'replicate' && !replicateReady) {
+      setError('Replicate requires credit purchase. Visit: ' + getReplicateApiUrl());
+      return;
     }
+    
+    if (provider === 'gemini' && !geminiReady) {
+      setError('Please configure Gemini API Key in .env.local');
+      return;
+    }
+    
+    setLoading(true);
+    setLoadingText('Preparing videos...');
+    setCurrentPhase('video');
+    const updatedScenes = [...scenes];
+    for (let i = 0; i < updatedScenes.length; i++) {
+      const scene = updatedScenes[i];
+      if (!scene.imageUrl) {
+        setLoadingText(`Scene ${i + 1} needs image first`);
+        continue;
+      }
+      setLoadingText(`Generating video ${i + 1}/${updatedScenes.length}: ${scene.title}`);
+      try {
+        const prompt = `Cinematic video: ${scene.title}. ${scene.shots?.map((s: Shot) => s.description).join('. ') || ''}`;
+        const videoUrl = await generateVideo(prompt, '16:9', (status) => setLoadingText(status));
+        updatedScenes[i] = { ...scene, videoUrl };
+        setScenes([...updatedScenes]);
+      } catch (err) {
+        console.error(`Video failed for scene ${i}:`, err);
+      }
+    }
+    setOutput({ ...output, scenes: updatedScenes });
+    setLoading(false);
   };
 
   return (
-    <div className="min-h-screen bg-[#070707] text-white flex flex-col">
-      {/* Header */}
-      <header className="h-16 border-b border-white/5 px-8 flex items-center justify-between bg-black/50 backdrop-blur-xl sticky top-0 z-50">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 bg-red-600 rounded rotate-45 flex items-center justify-center">
-            <div className="-rotate-45 font-black text-xs">AI</div>
+    <div className="min-h-screen" style={{ backgroundColor: '#030303', color: '#fafafa' }}>
+      <div className="film-grain"></div>
+      <div className="light-leak"></div>
+      <div style={{ position: 'relative', zIndex: 10, minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
+        <header style={{ textAlign: 'center', padding: '4rem 2rem 2rem' }}>
+          <h1 className="main-title" style={{ marginBottom: '0.5rem' }}>DRAMA STUDIO</h1>
+          <p className="subtitle">AI Short Drama Studio</p>
+          
+          {/* Provider Selector */}
+          <div style={{ marginTop: '1rem', display: 'flex', justifyContent: 'center', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: '0.7rem', color: 'rgba(250,250,250,0.4)', width: '100%', marginBottom: '0.25rem' }}>Image/Video Provider:</span>
+            
+            {/* Pollinations - BEST FREE */}
+            <button
+              onClick={() => setProvider('pollinations')}
+              style={{
+                padding: '6px 12px',
+                background: provider === 'pollinations' ? 'rgba(0, 200, 150, 0.35)' : 'transparent',
+                border: `1px solid ${provider === 'pollinations' ? 'rgba(0, 200, 150, 0.7)' : 'rgba(250,250,250,0.2)'}`,
+                borderRadius: '20px',
+                color: provider === 'pollinations' ? '#00c896' : 'rgba(250,250,250,0.5)',
+                fontSize: '0.75rem',
+                cursor: 'pointer',
+                transition: 'all 0.3s'
+              }}
+            >
+              🌱 Pollinations (Free)
+            </button>
+            
+            {/* HuggingFace */}
+            <button
+              onClick={() => setProvider('huggingface')}
+              style={{
+                padding: '6px 12px',
+                background: provider === 'huggingface' ? 'rgba(255, 165, 0, 0.35)' : 'transparent',
+                border: `1px solid ${provider === 'huggingface' ? 'rgba(255, 165, 0, 0.7)' : 'rgba(250,250,250,0.2)'}`,
+                borderRadius: '20px',
+                color: provider === 'huggingface' ? '#ffa500' : 'rgba(250,250,250,0.5)',
+                fontSize: '0.75rem',
+                cursor: 'pointer',
+                transition: 'all 0.3s'
+              }}
+            >
+              🤗 HF (FLUX)
+            </button>
+            
+            {/* Replicate */}
+            <button
+              onClick={() => setProvider('replicate')}
+              style={{
+                padding: '6px 12px',
+                background: provider === 'replicate' ? 'rgba(100, 200, 100, 0.3)' : 'transparent',
+                border: `1px solid ${provider === 'replicate' ? 'rgba(100, 200, 100, 0.6)' : 'rgba(250,250,250,0.2)'}`,
+                borderRadius: '20px',
+                color: provider === 'replicate' ? '#64c864' : 'rgba(250,250,250,0.5)',
+                fontSize: '0.75rem',
+                cursor: 'pointer',
+                transition: 'all 0.3s'
+              }}
+            >
+              Replicate
+            </button>
+            
+            {/* Gemini */}
+            <button
+              onClick={() => setProvider('gemini')}
+              style={{
+                padding: '6px 12px',
+                background: provider === 'gemini' ? 'rgba(196,30,58,0.3)' : 'transparent',
+                border: `1px solid ${provider === 'gemini' ? 'rgba(196,30,58,0.6)' : 'rgba(250,250,250,0.2)'}`,
+                borderRadius: '20px',
+                color: provider === 'gemini' ? '#c41e3a' : 'rgba(250,250,250,0.5)',
+                fontSize: '0.75rem',
+                cursor: 'pointer',
+                transition: 'all 0.3s'
+              }}
+            >
+              Gemini Veo
+            </button>
           </div>
-          <h1 className="font-black tracking-tighter text-xl">DRAMA STUDIO V2.1</h1>
-        </div>
-        
-        <div className="flex items-center gap-4">
-          <div className="flex bg-neutral-900 p-1 rounded-full border border-white/10">
-            {['concept', 'assets', 'storyboard'].map(p => (
-              <button 
-                key={p} 
-                onClick={() => state.scenes.length > 0 && setState(prev => ({...prev, phase: p as any}))}
-                className={`px-4 py-1.5 rounded-full text-[10px] font-black uppercase transition-all ${state.phase === p ? 'bg-red-600 text-white' : 'text-neutral-500'}`}
-              >
-                {p}
-              </button>
-            ))}
+          
+          {/* Status indicator */}
+          <div style={{ marginTop: '0.75rem', fontSize: '0.7rem' }}>
+            {provider === 'pollinations' && (
+              <span style={{ color: 'rgba(0, 200, 150, 0.8)' }}>
+                ✓ Pollinations (Free) - FLUX + Seedance Video
+              </span>
+            )}
+            {provider === 'huggingface' && (
+              <span style={{ color: 'rgba(255, 165, 0, 0.7)' }}>
+                ⚠ FLUX (may have network issues in China)
+              </span>
+            )}
+            {provider === 'replicate' && (
+              replicateReady ? (
+                <span style={{ color: 'rgba(100, 200, 100, 0.6)' }}>
+                  ✓ FLUX + Luma Dream Machine
+                </span>
+              ) : (
+                <span style={{ color: 'rgba(250,100,100,0.6)' }}>
+                  ⚠ Requires credit purchase
+                </span>
+              )
+            )}
+            {provider === 'gemini' && (
+              geminiReady ? (
+                <span style={{ color: 'rgba(196,30,58,0.6)' }}>
+                  ✓ Gemini Veo 3.1 Ready
+                </span>
+              ) : (
+                <span style={{ color: 'rgba(250,100,100,0.6)' }}>
+                  ⚠ API Key required
+                </span>
+              )
+            )}
           </div>
-        </div>
-      </header>
-
-      {/* Main Flow */}
-      <main className="flex-1 overflow-hidden flex">
-        {state.phase === 'concept' && (
-          <div className="flex-1 flex flex-col items-center justify-center p-20 text-center space-y-8">
-            <div className="max-w-2xl space-y-4">
-              <h2 className="text-6xl font-black tracking-tight">AI 导演中心</h2>
-              <p className="text-neutral-500 text-lg">输入短剧主题，系统将自动生成包含专业运镜指令的完整剧本。</p>
-            </div>
-            <div className="w-full max-w-xl relative">
-              <input 
-                value={state.theme}
-                onChange={e => setState(p => ({...p, theme: e.target.value}))}
-                placeholder="例如: 悬疑惊悚 - 消失的继承人..."
-                className="w-full bg-neutral-900 border-2 border-white/5 rounded-3xl py-6 px-10 text-xl focus:border-red-600 outline-none transition-all shadow-2xl"
+        </header>
+        <main style={{ width: '100%', maxWidth: '900px', margin: '0 auto', padding: '0 2rem' }}>
+          <section style={{ marginBottom: '3rem' }}>
+            <div style={{ position: 'relative' }}>
+              <textarea
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                placeholder="Enter your drama idea..."
+                style={{ width: '100%', minHeight: '160px', padding: '1.5rem 2rem', paddingRight: '180px', background: 'rgba(10,10,10,0.6)', border: '1px solid rgba(196,30,58,0.2)', borderRadius: '16px', color: '#fafafa', fontSize: '1rem', resize: 'none' }}
               />
-              <button 
-                onClick={handleGenerateScript}
-                disabled={loading || !state.theme}
-                className="absolute right-3 top-3 bottom-3 px-8 bg-red-600 hover:bg-red-500 rounded-2xl font-black disabled:opacity-50 transition-all flex items-center gap-2"
+              <button
+                onClick={handleGenerate}
+                disabled={loading || !input.trim()}
+                style={{ position: 'absolute', right: '12px', bottom: '12px', padding: '14px 28px', background: 'linear-gradient(135deg, #c41e3a 0%, #8b1528 100%)', border: 'none', borderRadius: '12px', color: 'white', fontSize: '0.95rem', fontWeight: 600, cursor: 'pointer' }}
               >
-                {loading ? <div className="w-4 h-4 border-2 border-white/20 border-t-white rounded-full animate-spin"></div> : "一键生成剧本资产"}
+                {loading ? <span>{loadingText || 'Generating...'}</span> : 'Start Creating'}
               </button>
             </div>
-          </div>
-        )}
-
-        {state.phase === 'assets' && (
-          <div className="flex-1 flex">
-            <div className="flex-1 p-10 overflow-y-auto space-y-10 custom-scrollbar">
-              <div className="flex justify-between items-center">
-                <h2 className="text-3xl font-black">资产概览 (Assets)</h2>
-                <button 
-                  onClick={() => setState(p => ({...p, phase: 'storyboard'}))}
-                  className="px-8 py-3 bg-red-600 hover:bg-red-500 rounded-xl font-black transition-all shadow-lg shadow-red-600/20"
-                >
-                  确认资产并进入分镜台
-                </button>
+            {error && (
+              <div style={{ color: '#ff6b6b', fontSize: '0.9rem', marginTop: '1rem', padding: '1rem', background: 'rgba(255,107,107,0.1)', borderRadius: '8px' }}>
+                {error}
               </div>
-              
-              <div className="grid grid-cols-2 gap-6">
-                {state.characterProfiles.map(char => (
-                  <div key={char.name} className="bg-neutral-900/50 p-6 rounded-3xl border border-white/5 group hover:border-red-500/30 transition-all">
-                    <h3 className="text-red-500 font-black mb-2 uppercase tracking-widest text-xs flex items-center gap-2">
-                      <span className="w-1.5 h-1.5 bg-red-500 rounded-full"></span>
-                      {char.name}
-                    </h3>
-                    <p className="text-sm text-neutral-300 leading-relaxed">{char.description}</p>
-                  </div>
-                ))}
-              </div>
-
-              <div className="p-8 bg-neutral-900/30 rounded-3xl border border-white/5 space-y-4">
-                <h3 className="font-black text-sm uppercase text-neutral-500 tracking-widest">全局视觉风格 (Global Cinematic Tone)</h3>
-                <textarea 
-                  value={state.globalStylePrompt}
-                  onChange={e => setState(p => ({...p, globalStylePrompt: e.target.value}))}
-                  className="w-full bg-black/40 border border-white/10 rounded-2xl p-6 text-sm resize-none h-32 focus:ring-1 focus:ring-red-500 outline-none"
-                />
-              </div>
-            </div>
-          </div>
-        )}
-
-        {state.phase === 'storyboard' && (
-          <>
-            <aside className="w-72 border-r border-white/5 bg-black/20 p-6 overflow-y-auto custom-scrollbar">
-              <div className="text-[10px] font-black text-neutral-600 uppercase mb-4 tracking-widest">场景导视</div>
-              <div className="space-y-2">
-                {state.scenes.map(s => (
-                  <button 
-                    key={s.id}
-                    onClick={() => setState(p => ({...p, currentSceneId: s.id}))}
-                    className={`w-full text-left p-4 rounded-2xl transition-all ${state.currentSceneId === s.id ? 'bg-red-600 shadow-lg shadow-red-600/20' : 'hover:bg-white/5'}`}
+            )}
+          </section>
+          {output && (
+            <section>
+              <div style={{ display: 'flex', justifyContent: 'center', gap: '1rem', marginBottom: '2rem', flexWrap: 'wrap' }}>
+                {(['script', 'image', 'video'] as const).map((phase) => (
+                  <button
+                    key={phase}
+                    onClick={() => setCurrentPhase(phase)}
+                    style={{ padding: '12px 32px', background: 'transparent', border: '1px solid rgba(196,30,58,0.3)', borderRadius: '50px', color: currentPhase === phase ? '#c41e3a' : 'rgba(250,250,250,0.5)', fontSize: '0.9rem', cursor: 'pointer', margin: '0 0.5rem' }}
                   >
-                    <div className="text-[9px] opacity-60 font-black mb-1">SCENE 0{s.id}</div>
-                    <div className="text-xs font-black truncate">{s.title}</div>
+                    {phase === 'script' ? 'Script' : phase === 'image' ? 'Images' : 'Videos'}
                   </button>
                 ))}
               </div>
-            </aside>
-
-            <main className="flex-1 p-10 overflow-y-auto bg-[#080808] custom-scrollbar">
-              <div className="max-w-5xl mx-auto space-y-10">
-                <div className="flex justify-between items-end bg-neutral-900/40 p-10 rounded-[2.5rem] border border-white/5">
-                  <div>
-                    <h2 className="text-4xl font-black mb-3">{currentScene.title}</h2>
-                    <p className="text-neutral-500 text-sm font-medium italic">"{currentScene.atmosphere}"</p>
-                  </div>
-                  <div className="flex flex-col items-end gap-3">
-                    {transitionState.start && transitionState.end ? (
-                      <button 
-                        onClick={startTransition}
-                        disabled={generatingSequence}
-                        className="bg-blue-600 px-8 py-3 rounded-2xl font-black flex items-center gap-2 hover:bg-blue-500 transition-all shadow-xl shadow-blue-600/30"
-                      >
-                        {generatingSequence ? (
-                          <>
-                            <div className="w-4 h-4 border-2 border-white/20 border-t-white rounded-full animate-spin"></div>
-                            正在渲染平滑转场...
-                          </>
-                        ) : "一键合成专业级镜头"}
-                      </button>
-                    ) : (
-                      <div className="text-[10px] text-neutral-600 font-bold uppercase tracking-widest">
-                        提示: 点击分镜右上角按钮设置起始/结束点以合成转场
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-8">
-                  {currentScene.shots.map(shot => (
-                    <ShotItem 
-                      key={shot.id}
-                      shot={shot}
-                      currentScene={currentScene}
-                      globalStyle={state.globalStylePrompt}
-                      characters={state.characterProfiles}
-                      onUpdate={handleUpdateShot}
-                      onSetAsTransitionTarget={(type) => setTransitionState(prev => ({...prev, [type]: shot.id}))}
-                      transitionRole={transitionState.start === shot.id ? 'start' : transitionState.end === shot.id ? 'end' : null}
-                    />
+              {currentPhase === 'script' && (
+                <div style={{ background: 'rgba(10,10,10,0.6)', border: '1px solid rgba(196,30,58,0.2)', borderRadius: '20px', padding: '2.5rem' }}>
+                  <h2 style={{ fontFamily: "'Playfair Display', serif", fontSize: '2rem', color: '#c41e3a', marginBottom: '1.5rem' }}>{output.title}</h2>
+                  <button onClick={handleGenerateImages} disabled={loading} style={{ padding: '8px 20px', background: 'rgba(196,30,58,0.2)', border: '1px solid rgba(196,30,58,0.4)', borderRadius: '8px', color: '#c41e3a', cursor: 'pointer', marginBottom: '1rem' }}>
+                    Generate Images
+                  </button>
+                  {output.scenes?.map((scene: any, idx: number) => (
+                    <div key={idx} style={{ marginBottom: '1.5rem', padding: '1.5rem', background: 'rgba(0,0,0,0.3)', borderRadius: '12px' }}>
+                      <h4 style={{ color: '#c41e3a', marginBottom: '0.5rem' }}>{idx + 1}. {scene.title}</h4>
+                      <p style={{ color: 'rgba(250,250,250,0.6)', fontStyle: 'italic', marginBottom: '1rem' }}>Atmosphere: {scene.atmosphere}</p>
+                    </div>
                   ))}
                 </div>
-              </div>
-            </main>
-          </>
-        )}
-      </main>
+              )}
+              {currentPhase === 'image' && (
+                <div>
+                  <button onClick={handleGenerateImages} disabled={loading} style={{ padding: '12px 32px', background: 'linear-gradient(135deg, #c41e3a 0%, #8b1528 100%)', border: 'none', borderRadius: '12px', color: 'white', fontSize: '1rem', fontWeight: 600, cursor: 'pointer', display: 'block', margin: '0 auto 2rem' }}>
+                    {loading ? loadingText : 'Generate All Images'}
+                  </button>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1.5rem' }}>
+                    {scenes.map((scene, idx) => (
+                      <div key={idx} style={{ background: 'rgba(10,10,10,0.6)', border: '1px solid rgba(196,30,58,0.2)', borderRadius: '16px', overflow: 'hidden' }}>
+                        {scene.imageUrl ? (
+                          <img src={scene.imageUrl} alt={`Scene ${idx + 1}`} style={{ width: '100%', height: '200px', objectFit: 'cover' }} />
+                        ) : (
+                          <div style={{ width: '100%', height: '200px', background: 'rgba(0,0,0,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'rgba(250,250,250,0.3)' }}>Waiting...</div>
+                        )}
+                        <div style={{ padding: '1rem' }}>
+                          <h4 style={{ color: '#c41e3a', marginBottom: '0.5rem' }}>{idx + 1}. {scene.title}</h4>
+                          <p style={{ color: 'rgba(250,250,250,0.7)', fontSize: '0.9rem' }}>{scene.atmosphere}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+                {currentPhase === 'video' && (
+                <div>
+                  <button 
+                    onClick={handleGenerateVideos} 
+                    disabled={loading || (provider === 'replicate' && !replicateReady) || (provider === 'gemini' && !geminiReady)} 
+                    style={{ padding: '12px 32px', background: 'linear-gradient(135deg, #c41e3a 0%, #8b1528 100%)', border: 'none', borderRadius: '12px', color: 'white', fontSize: '1rem', fontWeight: 600, cursor: 'pointer', display: 'block', margin: '0 auto 2rem' }}
+                  >
+                    {loading ? loadingText : 'Generate All Videos'}
+                  </button>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '1.5rem' }}>
+                    {scenes.map((scene, idx) => (
+                      <div key={idx} style={{ background: 'rgba(10,10,10,0.6)', border: '1px solid rgba(196,30,58,0.2)', borderRadius: '16px', overflow: 'hidden' }}>
+                        {scene.videoUrl ? (
+                          <video src={scene.videoUrl} controls style={{ width: '100%', height: '200px', objectFit: 'cover' }} />
+                        ) : scene.imageUrl ? (
+                          <img src={scene.imageUrl} alt={`Scene ${idx + 1}`} style={{ width: '100%', height: '200px', objectFit: 'cover' }} />
+                        ) : (
+                          <div style={{ width: '100%', height: '200px', background: 'rgba(0,0,0,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'rgba(250,250,250,0.3)' }}>Generate image first</div>
+                        )}
+                        <div style={{ padding: '1rem' }}>
+                          <h4 style={{ color: '#c41e3a', marginBottom: '0.5rem' }}>{idx + 1}. {scene.title}</h4>
+                          <p style={{ color: 'rgba(250,250,250,0.7)', fontSize: '0.9rem' }}>{scene.atmosphere}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </section>
+          )}
+        </main>
+      </div>
     </div>
   );
-};
+}
 
 export default App;

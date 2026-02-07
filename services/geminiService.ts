@@ -1,7 +1,9 @@
+import { GoogleGenAI } from "@google/genai";
 
-import { GoogleGenAI, Type } from "@google/genai";
-
-const getAI = () => new GoogleGenAI({ apiKey: process.env.API_KEY });
+const getAI = () => {
+  const apiKey = (process.env.GEMINI_API_KEY || process.env.API_KEY || "");
+  return new GoogleGenAI({ apiKey });
+};
 
 // 1. 生成剧本
 export const generateScript = async (theme: string) => {
@@ -33,8 +35,8 @@ export const generateScript = async (theme: string) => {
     ]
   }`;
 
-  const response = await ai.models.generateContent({
-    model: 'gemini-3-pro-preview',
+  const response = await (ai as any).models.generateContent({
+    model: 'gemini-1.5-pro', // Using 1.5 pro for scripts
     contents: prompt,
     config: {
       responseMimeType: "application/json"
@@ -44,80 +46,89 @@ export const generateScript = async (theme: string) => {
   return JSON.parse(response.text || '{}');
 };
 
-// 2. 生成底图（支持一致性参考）
+// 2. 生成底图（简化版 - 兼容 App.tsx）
 export const generateImage = async (
-  prompt: string, 
-  stylePrefix: string, 
-  characterContext: string, 
-  sceneContext: string,
-  referenceImageBase64?: string
+  prompt: string,
+  aspectRatio: string = '16:9',
+  sceneNumber?: number
 ) => {
   const ai = getAI();
-  const fullPrompt = `
-    STYLE: ${stylePrefix}
-    SCENE: ${sceneContext}
-    ACTION: ${prompt}
-    CHARACTERS: ${characterContext}
-    TECHNICAL: Cinematic lighting, 8k, photorealistic, consistency key.
-  `.trim();
-
-  const parts: any[] = [{ text: fullPrompt }];
-  if (referenceImageBase64) {
-    parts.unshift({
-      inlineData: {
-        data: referenceImageBase64.replace(/^data:image\/\w+;base64,/, ""),
-        mimeType: 'image/png'
-      }
-    });
-  }
-
-  const response = await ai.models.generateContent({
-    model: 'gemini-2.5-flash-image',
-    contents: { parts },
-    config: { imageConfig: { aspectRatio: "16:9" } }
+  
+  const response = await (ai as any).models.generateContent({
+    model: 'gemini-2.0-flash-exp-image-generation',
+    contents: { parts: [{ text: prompt }] },
+    config: { imageConfig: { aspectRatio } }
   });
 
-  const part = response.candidates?.[0]?.content?.parts.find(p => p.inlineData);
+  const part = response.candidates?.[0]?.content?.parts?.find((p: any) => p.inlineData);
   return part ? `data:image/png;base64,${part.inlineData.data}` : null;
 };
 
 // 3. 生成带转场的视频（起始帧 + 结束帧）
-export const generateTransitionVideo = async (
-  startImageBase64: string,
-  endImageBase64: string,
-  prompt: string
+export const generateVideo = async (
+  prompt: string,
+  aspectRatio: string,
+  onProgress?: (status: string) => void
 ) => {
-  const ai = getAI();
-  const startData = startImageBase64.replace(/^data:image\/\w+;base64,/, "");
-  const endData = endImageBase64.replace(/^data:image\/\w+;base64,/, "");
+  const apiKey = (process.env.GEMINI_API_KEY || process.env.API_KEY || "");
+  const ai = new GoogleGenAI({ apiKey });
 
-  let operation = await ai.models.generateVideos({
-    model: 'veo-3.1-fast-generate-preview',
-    prompt: `Cinematic high-quality video transition. ${prompt}`,
-    image: {
-      imageBytes: startData,
-      mimeType: 'image/png',
-    },
-    config: {
-      numberOfVideos: 1,
-      resolution: '720p',
-      aspectRatio: '16:9',
-      lastFrame: {
-        imageBytes: endData,
-        mimeType: 'image/png'
+  try {
+    if (onProgress) onProgress('Starting video generation with Veo 3.1...');
+
+    let operation = await (ai as any).models.generateVideos({
+      model: 'veo-3.1-fast-generate-preview',
+      prompt: `Cinematic high-quality video. ${prompt}`,
+      config: {
+        numberOfVideos: 1,
+        resolution: '720p',
+        aspectRatio: aspectRatio === '16:9' ? '16:9' : '9:16'
       }
+    });
+
+    console.log('Video generation started:', operation.name);
+
+    while (!operation.done) {
+      await new Promise(resolve => setTimeout(resolve, 5000));
+      if (onProgress) onProgress('Processing video...');
+      operation = await (ai as any).operations.getVideosOperation({
+        name: operation.name
+      });
     }
-  });
 
-  while (!operation.done) {
-    await new Promise(resolve => setTimeout(resolve, 10000));
-    operation = await ai.operations.getVideosOperation({ operation: operation });
+    if (operation.error) {
+      throw new Error(`Video generation failed: ${operation.error.message}`);
+    }
+
+    const videoResult = operation.response?.generatedVideos?.[0];
+    if (!videoResult?.video?.uri) {
+      throw new Error('No video URI returned from API');
+    }
+
+    const downloadLink = videoResult.video.uri;
+    const finalUrl = downloadLink.includes('?')
+      ? `${downloadLink}&key=${apiKey}`
+      : `${downloadLink}?key=${apiKey}`;
+
+    const response = await fetch(finalUrl);
+    if (!response.ok) throw new Error('Failed to download generated video');
+
+    const blob = await response.blob();
+    return URL.createObjectURL(blob);
+  } catch (error: any) {
+    console.error('Error in generateVideo:', error);
+    throw error;
   }
+};
 
-  const downloadLink = operation.response?.generatedVideos?.[0]?.video?.uri;
-  const response = await fetch(`${downloadLink}&key=${process.env.API_KEY}`);
-  const blob = await response.blob();
-  return URL.createObjectURL(blob);
+// 保持原有函数名向后兼容
+export const generateTransitionVideo = generateVideo;
+
+export const checkGeminiConfig = () => {
+  const apiKey = (typeof process !== 'undefined' && process.env?.VITE_GEMINI_API_KEY) ||
+                  (typeof window !== 'undefined' && (window as any)?.ENV?.VITE_GEMINI_API_KEY) ||
+                  "";
+  return !!apiKey;
 };
 
 export const checkVideoApiKey = async () => {
